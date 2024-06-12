@@ -1,26 +1,107 @@
+use std::{
+    collections::HashMap,
+    mem::{discriminant, Discriminant},
+};
+
 #[derive(Debug)]
 struct Game {
     player_idx: usize,
     nb_game: usize,
 }
 
+#[derive(Debug, Clone, Default)]
+struct VoteManager {
+    votes: HashMap<Discriminant<GameInfo>, [f64; 4]>,
+}
+
+impl VoteManager {
+    fn clear(&mut self) {
+        self.votes.clear();
+    }
+
+    fn vote(&mut self, game: &GameInfo, votes: [f64; 4]) {
+        if matches!(game, GameInfo::Unused) {
+            return;
+        }
+        let key = discriminant(game);
+        self.votes.insert(key, votes);
+    }
+
+    fn get_result(&mut self) -> Input {
+        let mut results = self
+            .votes
+            .values()
+            .copied()
+            .map(|a| {
+                let mut i = 0;
+                a.map(|w| {
+                    (
+                        {
+                            let temp = i;
+                            i += 1;
+                            NUM_TO_INPUT[temp]
+                        },
+                        w,
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        loop {
+            let mut clone = results.clone();
+            let total = clone.iter().flatten().map(|(_, w)| *w).sum::<f64>();
+            if total == 0.0 {
+                break Input::Up;
+            }
+            clone.iter_mut().flatten().for_each(|(_, w)| *w /= total);
+            let mut res = HashMap::new();
+            clone
+                .iter()
+                .flatten()
+                .filter(|(_, w)| *w != 0.0)
+                .for_each(|(i, w)| *res.entry(*i).or_insert(0f64) += *w);
+            if let Some((i, _)) = res.iter().find(|(_, w)| **w >= 0.5) {
+                break *i;
+            };
+            let min = *(res
+                .iter()
+                .min_by(|(_, r), (_, l)| r.partial_cmp(l).unwrap())
+                .unwrap()
+                .0);
+            results.iter_mut().for_each(|v| v[min as usize].1 = 0.0f64);
+        }
+    }
+}
+
 trait NextLine {
     fn next_line(&mut self) -> Result<String>;
+    fn pnext_line(&mut self) -> Result<String> {
+        match self.next_line() {
+            Ok(s) => {
+                eprintln!("input was '{s:?}'");
+                Ok(s)
+            }
+            Err(e) => Err(e),
+        }
+    }
 }
 
 impl<B: std::io::BufRead> NextLine for std::io::Lines<B> {
     fn next_line(&mut self) -> Result<String> {
         let val = self.next().ok_or("no input left")??;
-        eprintln!("input was '{val:?}'");
         Ok(val)
     }
 }
 #[derive(Debug, Default, Copy, Clone)]
-struct PlayerInfo {
-    final_score: usize,
+struct Score {
     gold: usize,
     silver: usize,
     bronze: usize,
+}
+
+#[derive(Debug, Default, Copy, Clone)]
+struct PlayerInfo {
+    final_score: usize,
+    scores: [Score; 4],
 }
 
 #[derive(Debug, Default, Copy, Clone)]
@@ -46,6 +127,12 @@ struct RollerPlayer {
 struct Vec2d<T> {
     x: T,
     y: T,
+}
+
+impl Vec2d<i32> {
+    fn mag(&self) -> f64 {
+        ((self.x.pow(2) + self.y.pow(2)) as f64).sqrt()
+    }
 }
 
 #[derive(Debug, Default)]
@@ -76,7 +163,7 @@ impl GameInfo {
         match self {
             Self::Unused => {}
             Self::Diving { gpu, players } => {
-                let line = io.next_line()?;
+                let line = io.pnext_line()?;
                 let mut line = line.split_whitespace();
                 *gpu = line
                     .next()
@@ -95,7 +182,7 @@ impl GameInfo {
                 players,
                 turns_left,
             } => {
-                let line = io.next_line()?;
+                let line = io.pnext_line()?;
                 let mut line = line.split_whitespace();
                 *gpu = line
                     .next()
@@ -118,7 +205,7 @@ impl GameInfo {
                 *turns_left = line.next().ok_or("no field!")?.parse()?;
             }
             Self::HurdleRace { gpu, players } => {
-                let line = io.next_line()?;
+                let line = io.pnext_line()?;
                 let mut line = line.split_whitespace();
                 *gpu = line
                     .next()
@@ -134,7 +221,7 @@ impl GameInfo {
                 players[2].stunt = line.next().ok_or("no field!")?.parse()?;
             }
             Self::Archery { gpu, players } => {
-                let line = io.next_line()?;
+                let line = io.pnext_line()?;
                 let mut line = line.split_whitespace();
                 let gpu_tmp = line.next().ok_or("no field!")?;
                 *gpu = if gpu_tmp == "GAME_OVER" {
@@ -213,9 +300,11 @@ impl Game {
             let line = io.next_line()?;
             let mut line = line.split_whitespace();
             player.final_score = line.next().ok_or("no field!")?.parse()?;
-            player.gold = line.next().ok_or("no field!")?.parse()?;
-            player.silver = line.next().ok_or("no field!")?.parse()?;
-            player.bronze = line.next().ok_or("no field!")?.parse()?;
+            for i in 0..4 {
+                player.scores[i].gold = line.next().ok_or("no field!")?.parse()?;
+                player.scores[i].silver = line.next().ok_or("no field!")?.parse()?;
+                player.scores[i].bronze = line.next().ok_or("no field!")?.parse()?;
+            }
         }
         drop(io);
         for g in &mut info.games {
@@ -225,7 +314,7 @@ impl Game {
     }
 }
 
-#[derive(Clone, Debug, Copy)]
+#[derive(Clone, Debug, Copy, Hash, Eq, PartialEq)]
 #[repr(usize)]
 enum Input {
     Left = 0,
@@ -249,11 +338,92 @@ impl std::fmt::Display for Input {
     }
 }
 
+const NUM_TO_INPUT: [Input; 4] = {
+    let mut arr = [Input::Up; 4];
+    arr[Input::Up as usize] = Input::Up;
+    arr[Input::Left as usize] = Input::Left;
+    arr[Input::Right as usize] = Input::Right;
+    arr[Input::Down as usize] = Input::Down;
+    arr
+};
+
+macro_rules! cast_vote {
+    {
+        ($n1:ident: $w1:literal),
+        ($n2:ident: $w2:literal),
+        ($n3:ident: $w3:literal),
+        ($n4:ident: $w4:literal)$(,)?
+    } => {
+        {
+            let mut arr = [0.0; 4];
+            arr[Input::$n1 as usize] = Input::$w1;
+            arr[Input::$n2 as usize] = Input::$w2;
+            arr[Input::$n3 as usize] = Input::$w3;
+            arr[Input::$n4 as usize] = Input::$w4;
+            arr
+        }
+    };
+    {
+        ($n1:ident: $w1:literal),
+        ($n2:ident: $w2:literal),
+        ($n3:ident: $w3:literal)$(,)?
+    } => {
+        {
+            let mut arr = [0.0f64; 4];
+            arr[Input::$n1 as usize] = $w1;
+            arr[Input::$n2 as usize] = $w2;
+            arr[Input::$n3 as usize] = $w3;
+            arr
+        }
+    };
+    {
+        ($n1:ident: $w1:literal),
+        ($n2:ident: $w2:literal)$(,)?
+    } => {
+        {
+            let mut arr = [0.0f64; 4];
+            arr[Input::$n1 as usize] = $w1;
+            arr[Input::$n2 as usize] = $w2;
+            arr
+        }
+    };
+    {
+        ($n1:ident: $w1:literal)$(,)?
+    } => {
+        {
+            let mut arr = [0.0f64; 4];
+            arr[Input::$n1 as usize] = $w1;
+            arr
+        }
+    };
+    {
+    } => {
+        {
+            let mut arr = [0.0f64; 4];
+            arr
+        }
+    };
+    {$($name:ident),*$(,)?} => {
+        {
+            let mut arr = [0.0f64; 4];
+            let mut w = 1.0f64;
+            #[allow(unused)]
+            {
+            $(
+                arr[Input::$name as usize] = w;
+                w += 1.0;
+            )*
+            }
+            arr
+        }
+    };
+}
+
 fn main() -> Result<()> {
     let mut game = Game::parse()?;
-    let mut votes = Vec::<Input>::with_capacity(4);
+    let mut votes = VoteManager::default();
     loop {
-        let mut turn = game.get_turn()?;
+        let turn = game.get_turn()?;
         let player_info = &turn.players[game.player_idx];
         votes.clear();
         for game_info in &turn.games {
@@ -279,12 +449,62 @@ fn main() -> Result<()> {
                         .find(|(_, c)| *c == '#')
                         .map(|(i, _)| i)
                         .unwrap_or(usize::MAX);
-                    votes.push(match next_fence.saturating_sub(player.pos) {
-                        0 | 1 => Input::Up,
-                        2 => Input::Left,
-                        3 => Input::Down,
-                        4.. => Input::Right,
-                        _ => Input::Right,
+
+                    // votes.vote(
+                    //     game_info,
+                    //     match next_fence.saturating_sub(player.pos) {
+                    //         0 | 1 => cast_vote![Up, Right, Down, Left],
+                    //         2 => cast_vote![Left, Up, Right, Down],
+                    //         3 => cast_vote![Down, Up, Right, Left],
+                    //         _ => cast_vote![Right, Down, Up, Left],
+                    //     },
+                    // )
+                }
+                GameInfo::Archery { gpu, players } => {
+                    if gpu.is_empty() {
+                        continue;
+                    }
+                    let pos = players[game.player_idx];
+                    let wind = *(gpu.first().unwrap()) as i32;
+
+                    let mut locvotes = [
+                        (
+                            Input::Up,
+                            Vec2d {
+                                x: pos.x,
+                                y: pos.y + wind,
+                            },
+                        ),
+                        (
+                            Input::Down,
+                            Vec2d {
+                                x: pos.x,
+                                y: pos.y - wind,
+                            },
+                        ),
+                        (
+                            Input::Left,
+                            Vec2d {
+                                x: pos.x + wind,
+                                y: pos.y,
+                            },
+                        ),
+                        (
+                            Input::Right,
+                            Vec2d {
+                                x: pos.x - wind,
+                                y: pos.y,
+                            },
+                        ),
+                    ];
+                    locvotes.sort_by(|l, r| l.1.mag().partial_cmp(&r.1.mag()).unwrap());
+                    votes.vote(game_info, {
+                        let mut arr = [0.0f64; 4];
+                        locvotes
+                            .iter()
+                            .enumerate()
+                            .for_each(|(idx, (input, _))| arr[*input as usize] = idx as f64);
+                        arr
                     })
                 }
                 _ => {
@@ -292,30 +512,6 @@ fn main() -> Result<()> {
                 }
             }
         }
-        const NUM_TO_INPUT: [Input; 4] = {
-            let mut arr = [Input::Up; 4];
-            arr[Input::Up as usize] = Input::Up;
-            arr[Input::Left as usize] = Input::Left;
-            arr[Input::Right as usize] = Input::Right;
-            arr[Input::Down as usize] = Input::Down;
-            arr
-        };
-        let mut counts = [0; 4];
-        votes.iter().for_each(|&v| counts[v as usize] += 1);
-        eprintln!("{counts:?}");
-        let res = if counts[Input::Up as usize] > 0 {
-            Input::Up
-        } else {
-            counts
-                .iter()
-                .copied()
-                .enumerate()
-                .filter(|&(_, c)| c != 0)
-                .max_by_key(|&(_, c)| c)
-                .map(|(i, _)| NUM_TO_INPUT[i])
-                .unwrap_or(Input::Right)
-        };
-        println!("{res}");
-        eprintln!("{res:?}");
+        println!("{}", votes.get_result());
     }
 }

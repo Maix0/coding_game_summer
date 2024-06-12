@@ -1,5 +1,17 @@
 {
   "nodes": {
+    "cglocal-jar-raw": {
+      "flake": false,
+      "locked": {
+        "narHash": "sha256-0EtzO09kGIA7nN3n9ZaegMz24oIxqwbbF+a3Sgt1UvU=",
+        "type": "file",
+        "url": "https://github.com/jmerle/cg-local-app/releases/download/1.3.0/cg-local-app-1.3.0.jar"
+      },
+      "original": {
+        "type": "file",
+        "url": "https://github.com/jmerle/cg-local-app/releases/download/1.3.0/cg-local-app-1.3.0.jar"
+      }
+    },
     "flake-utils": {
       "inputs": {
         "systems": "systems"
@@ -68,6 +80,7 @@
     },
     "root": {
       "inputs": {
+        "cglocal-jar-raw": "cglocal-jar-raw",
         "flake-utils": "flake-utils",
         "nixpkgs": "nixpkgs",
         "rust-overlay": "rust-overlay"
